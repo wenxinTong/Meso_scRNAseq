@@ -1,1 +1,67 @@
-ddd
+library(SingleCellExperiment)
+library(Seurat)
+library(tidyverse)
+library(Matrix)
+library(scales)
+library(cowplot)
+library(RCurl)
+library(AnnotationHub)
+
+############ read the data ##############
+
+for (file in c("HMSLN1", "HMSLN2","HMSLN3","HMSLN5","HMSLN6")){
+        seurat_data <- Read10X(data.dir = paste0("./", file))
+        seurat_obj <- CreateSeuratObject(counts = seurat_data, 
+                                         min.features = 100, 
+                                         project = file)
+        assign(file, seurat_obj)
+}
+
+HMSLN1$Replicate<-"Rep1"
+HMSLN1$Group<-"High_IR"
+dim(HMSLN1)
+
+HMSLN2$Replicate<-"Rep2"
+HMSLN2$Group<-"High_IR"
+dim(HMSLN2)
+
+HMSLN3$Replicate<-"Rep3"
+HMSLN3$Group<-"High_IR"
+dim(HMSLN3)
+
+HMSLN5$Replicate<-"Rep1"
+HMSLN5$Group<-"Low_IR"
+dim(HMSLN5)
+
+HMSLN6$Replicate<-"Rep2"
+HMSLN6$Group<-"Low_IR"
+dim(HMSLN6)
+
+HMSLN1[["percent.mt"]] <- PercentageFeatureSet(HMSLN1, pattern = "^mt-")
+HMSLN2[["percent.mt"]] <- PercentageFeatureSet(HMSLN2, pattern = "^mt-")
+HMSLN3[["percent.mt"]] <- PercentageFeatureSet(HMSLN3, pattern = "^mt-")
+HMSLN5[["percent.mt"]] <- PercentageFeatureSet(HMSLN5, pattern = "^mt-")
+HMSLN6[["percent.mt"]] <- PercentageFeatureSet(HMSLN6, pattern = "^mt-")
+HMSLN1 <- subset(HMSLN1, subset = percent.mt < 10 & nCount_RNA < 15000 & nFeature_RNA > 100)
+HMSLN2 <- subset(HMSLN2, subset = percent.mt < 10 & nCount_RNA < 15000 & nFeature_RNA > 100)
+HMSLN3 <- subset(HMSLN3, subset = percent.mt < 10 & nCount_RNA < 15000 & nFeature_RNA > 100)
+HMSLN5 <- subset(HMSLN5, subset = percent.mt < 10 & nCount_RNA < 15000 & nFeature_RNA > 100)
+HMSLN6 <- subset(HMSLN6, subset = percent.mt < 10 & nCount_RNA < 15000 & nFeature_RNA > 100)
+
+HMSLN1<-NormalizeData(HMSLN1)
+HMSLN2<-NormalizeData(HMSLN2)
+HMSLN3<-NormalizeData(HMSLN3)
+HMSLN5<-NormalizeData(HMSLN5)
+HMSLN6<-NormalizeData(HMSLN6)
+
+
+
+############ merge the High IR dataset ##############
+
+
+
+
+
+
+
+
