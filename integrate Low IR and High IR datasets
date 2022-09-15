@@ -80,6 +80,7 @@ Integrated_d15 <- FindClusters(Integrated_d15, resolution = 0.1)
 Integrated_d15 <- RunTSNE(Integrated_d15, dims = 1:15)
 Integrated_d15$sample<-factor(Integrated_d15$sample,levels = c("Low_IR","High_IR"))
 
+save(Integrated_d15, file="./Integrated_d15.RData")
 
 DimPlot(Integrated_d15, reduction = "tsne", label = TRUE)
 ggsave("./NT_results/Integrated_d15_tsne_1.pdf",device="pdf",plot = last_plot(),dpi = 300,width = 6,height = 6)
