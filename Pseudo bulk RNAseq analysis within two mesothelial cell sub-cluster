@@ -1,0 +1,624 @@
+library(purrr)
+library(reshape2)
+library(tibble)
+library(tidyverse)
+library(cowplot)
+library(magrittr)
+library(Matrix)
+library(Matrix.utils)
+library(scater)
+library(SingleCellExperiment)
+library(Seurat)
+library(DESeq2)
+library(pheatmap)
+library(apeglm)
+library("ggvenn")
+
+####### Filter the dataset for the pesudo RNAseq analysis ######
+load("subset_seurat.RData")
+
+counts <- subset_seurat@assays$RNA@counts
+subset_seurat@meta.data$group<-gsub("_.*","",subset_seurat@meta.data$sample)
+subset_seurat@meta.data$group<-paste(subset_seurat@meta.data$group,"IR",sep="")
+
+head(subset_seurat@meta.data$group)
+subset_seurat@meta.data$sample_id<-paste(subset_seurat@meta.data$group,subset_seurat@meta.data$orig.ident,sep = "")
+subset_seurat@meta.data$sample_id<-as.factor(subset_seurat@meta.data$sample_id)
+
+metadata <- subset_seurat@meta.data
+metadata$cluster_id <- factor(subset_seurat@active.ident)
+
+sce <- SingleCellExperiment(assays = list(counts = counts), 
+                           colData = metadata)
+
+groups <- colData(sce)[, c("cluster_id", "sample_id")]
+
+counts(sce)[1:6, 1:6]
+
+dim(colData(sce))
+
+head(colData(sce))
+
+kids <- purrr::set_names(levels(sce$cluster_id))
+kids
+nk <- length(kids)
+nk
+
+sids <- purrr::set_names(levels(sce$sample_id))
+ns <- length(sids)
+ns
+
+table(sce$sample)
+n_cells <- as.numeric(table(sce$sample_id))
+m <- match(sids, sce$sample_id)
+
+ei <- data.frame(colData(sce)[m, ], 
+                  n_cells, row.names = NULL) %>% 
+                select(-"cluster_id")
+ei
+
+dim(sce)
+
+
+out <- perCellQCMetrics(sce)
+
+sce$is_outlier <- isOutlier(
+        metric = out$sum,
+        nmads = 2, type = "lower", log = T)
+summary(sce$is_outlier)
+
+sce <- subset(sce,sce$is_outlier=="FALSE")
+dim(sce)
+
+sce <- subset(sce,rowSums(counts(sce) > 1) >= 10)
+  
+
+
+dim(sce)
+
+groups <- colData(sce)[, c("cluster_id", "sample_id")]
+pb <- aggregate.Matrix(t(counts(sce)), 
+                       groupings = groups, fun = "sum") 
+
+class(pb)
+
+dim(pb)
+
+
+####### Not every cluster is present in all samples; create a vector that represents how to split samples ######
+splitf <- sapply(stringr::str_split(rownames(pb), 
+                                    pattern = "_",  
+                                    n = 2), 
+                 `[`, 1)
+
+
+
+head(rownames(pb))
+
+pb <- split.data.frame(pb, 
+                       factor(splitf)) %>%
+        lapply(function(u) 
+                set_colnames(t(u), 
+                             stringr::str_extract(rownames(u), "(?<=_)[:alnum:]+")))
+
+class(pb)
+str(pb)
+
+options(width = 100)
+table(sce$cluster_id, sce$sample_id)
+
+get_sample_ids <- function(x){
+        pb[[x]] %>%
+                colnames()
+}
+
+colnames(pb[[1]])
+
+de_samples <- purrr::map(1:length(kids), get_sample_ids) %>%
+        unlist()
+
+samples_list <- purrr::map(1:length(kids), get_sample_ids)
+
+get_cluster_ids <- function(x){
+        rep(names(pb)[x], 
+            each = length(samples_list[[x]]))
+}
+
+de_cluster_ids <- purrr::map(1:length(kids), get_cluster_ids) %>%
+        unlist()
+
+gg_df <- data.frame(cluster_id = de_cluster_ids,
+                    sample_id = de_samples)
+
+gg_df <- left_join(gg_df, ei[, c("sample_id", "group")]) 
+
+
+metadata <- gg_df %>%
+        dplyr::select(cluster_id, sample_id, group) 
+        
+metadata  
+
+clusters <- as.factor(metadata$cluster_id)
+levels(clusters)
+
+
+##################### subset the dataset to have only mesothelial cells 1 cluster and conduct DE analysis between High IR and Low IR using DEseq2 ###############
+
+clusters <- as.factor(metadata$cluster_id)
+levels(clusters)
+
+cluster_metadata <- metadata[which(metadata$cluster_id == clusters[1]), ]
+head(cluster_metadata)
+
+rownames(cluster_metadata) <- cluster_metadata$sample_id
+head(cluster_metadata)
+
+
+counts <- pb[[clusters[1]]]
+
+cluster_counts <- data.frame(counts[, which(colnames(counts) %in% rownames(cluster_metadata))])
+head(counts)
+
+all(rownames(cluster_metadata) == colnames(cluster_counts))     
+ncol(cluster_counts) == nrow(cluster_metadata)
+dds.meso_sub1 <- DESeqDataSetFromMatrix(cluster_counts, 
+                              colData = cluster_metadata, 
+                              design = ~ group)
+
+rld.meso_sub1 <- rlog(dds.meso_sub1, blind=TRUE)
+
+DESeq2::plotPCA(rld.meso_sub1, intgroup = "group")
+
+rld_mat <- assay(rld.meso_sub1)
+rld_cor <- cor(rld_mat)
+meso_heat<-pheatmap(rld_cor, annotation = cluster_metadata[, c("group"), drop=F],)
+save_pheatmap_pdf <- function(x, filename, width=6, height=4) {
+   stopifnot(!missing(x))
+   stopifnot(!missing(filename))
+   pdf(filename, width=width, height=height)
+   grid::grid.newpage()
+   grid::grid.draw(x$gtable)
+   dev.off()
+}
+save_pheatmap_pdf(meso_heat, "./NT_results/NT_results/subgroup_comparision/meso_sub1_heatmap.pdf")
+
+ggsave("./NT_results/NT_results/subgroup_comparision/meso_sub1_PCA.pdf",device="pdf",plot = last_plot(),dpi = 300,width = 6,height = 4)
+
+
+dds.meso_sub1 <- DESeq(dds.meso_sub1)
+plotDispEsts(dds.meso_sub1)
+
+cluster_metadata$group<-as.factor(cluster_metadata$group)
+
+levels(cluster_metadata$group)[2]
+levels(cluster_metadata$group)[1]
+
+contrast <- c("group", levels(cluster_metadata$group)[2], levels(cluster_metadata$group)[1])
+res.meso_sub1 <- results(dds.meso_sub1, 
+               contrast = contrast,
+               alpha = 0.05)
+
+res.meso_sub1 <- lfcShrink(dds.meso_sub1, 
+                 coef=2, type="apeglm")
+
+res_meso1_tbl <- res.meso_sub1 %>%
+        data.frame() %>%
+        rownames_to_column(var="gene") %>%
+        as_tibble()
+
+write.csv(res_meso1_tbl,
+          paste0("./NT_results/NT_results/subgroup_comparision/", clusters[1], "_", levels(cluster_metadata$sample)[2], "_vs_", levels(cluster_metadata$sample)[1], "_all_genes.csv"),
+          quote = FALSE, 
+          row.names = FALSE)
+
+res_meso1_tbl
+
+padj_cutoff <- 0.05
+
+sig_res_meso1 <- dplyr::filter(res_meso1_tbl, padj < padj_cutoff) %>%
+        dplyr::arrange(padj)
+
+write.csv(sig_res_meso1,
+          paste0("./NT_results/NT_results/subgroup_comparision/", clusters[1], "_", levels(cluster_metadata$sample)[2], "_vs_", levels(cluster_metadata$sample)[1], "_sig_genes.csv"),
+          quote = FALSE, 
+          row.names = FALSE)
+
+sig_res_meso1
+
+normalized_meso1_counts <- counts(dds.meso_sub1, 
+                            normalized = TRUE)
+
+top20_sig_meso1_genes <- sig_res_meso1 %>%
+        dplyr::arrange(padj) %>%
+        dplyr::pull(gene) %>%
+        head(n=20)
+
+top20_sig_meso1_norm <- data.frame(normalized_meso1_counts) %>%
+        rownames_to_column(var = "gene") %>%
+        dplyr::filter(gene %in% top20_sig_meso1_genes)
+
+gathered_top20_meso1_sig <- top20_sig_meso1_norm %>%
+        gather(colnames(top20_sig_meso1_norm)[2:length(colnames(top20_sig_meso1_norm))], key = "samplename", value = "normalized_counts")
+        
+gathered_top20_meso1_sig <- inner_join(ei[, c("sample_id", "group" )], gathered_top20_meso1_sig, by = c("sample_id" = "samplename"))
+
+ggplot(gathered_top20_meso1_sig) +
+        geom_point(aes(x = gene, 
+                       y = normalized_counts, 
+                       color = group), 
+                   position=position_jitter(w=0.1,h=0)) +
+        scale_y_log10() +
+        xlab("Genes") +
+        ylab("log10 Normalized Counts") +
+        ggtitle("Top 20 Significant DE Genes") +
+        theme_bw() +
+        theme(axis.text.x = element_text(angle = 45, hjust = 1)) + 
+        theme(plot.title = element_text(hjust = 0.5))
+
+sig_meso1_norm <- data.frame(normalized_meso1_counts) %>%
+        rownames_to_column(var = "gene") %>%
+        dplyr::filter(gene %in% sig_res_meso1$gene)
+heat_colors <- brewer.pal(6, "YlOrRd")
+
+sig_meso1_heat<-pheatmap(sig_meso1_norm[ , 2:length(colnames(sig_meso1_norm))], 
+    color = heat_colors, 
+    cluster_rows = T, 
+    show_rownames = F,
+    annotation = cluster_metadata[, c("group", "cluster_id")], 
+    border_color = NA, 
+    fontsize = 10, 
+    scale = "row", 
+    fontsize_row = 10, 
+    height = 20)     
+
+save_pheatmap_pdf <- function(x, filename, width=8, height=6) {
+   stopifnot(!missing(x))
+   stopifnot(!missing(filename))
+   pdf(filename, width=width, height=height)
+   grid::grid.newpage()
+   grid::grid.draw(x$gtable)
+   dev.off()
+}
+
+save_pheatmap_pdf(sig_meso1_heat, "./NT_results/NT_results/subgroup_comparision/meso_sub1_sig_change_heatmap.pdf")
+
+
+
+
+res_table_thres_meso1 <- res_meso1_tbl %>% 
+                  mutate(threshold = padj < 0.05 & abs(log2FoldChange) >= 0.58)
+
+ggplot(res_table_thres_meso1) +
+    geom_point(aes(x = log2FoldChange, y = -log10(padj), colour = threshold)) +
+    ggtitle("Volcano plot of High_IR mesothelia 1 cells relative to Low_IR") +
+    xlab("log2 fold change") + 
+    ylab("-log10 adjusted p-value") +
+    scale_y_continuous(limits = c(0,50)) +
+    theme(legend.position = "none",
+          plot.title = element_text(size = rel(1.5), hjust = 0.5),
+          axis.title = element_text(size = rel(1.25)))  
+
+
+ggplot(gathered_top20_meso1_sig) +
+        geom_point(aes(x = gene, 
+                       y = normalized_counts, 
+                       color = group), 
+                   position=position_jitter(w=0.1,h=0)) +
+        scale_y_log10() +
+        xlab("Genes") +
+        ylab("log10 Normalized Counts") +
+        ggtitle("Top 20 Significant DE Genes") +
+        theme_bw() +
+        theme(axis.text.x = element_text(angle = 45, hjust = 1)) + 
+        theme(plot.title = element_text(hjust = 0.5))
+
+sig_res_meso1$gene<-str_to_title(sig_res_meso1$gene)
+
+up_High_to_low_IR<-filter(sig_res_meso1,log2FoldChange<0)
+down_High_to_low_IR<-filter(sig_res_meso1,log2FoldChange>0)
+
+
+library(enrichR)
+
+pathways <- c('GO_Biological_Process_2018','KEGG_2019_Human','WikiPathways_2019_Human')
+  
+  up_High_to_low_IR_meso1_path<-enrichr(up_High_to_low_IR$gene,pathways)
+  up_High_to_low_IR_meso1_path<-up_High_to_low_IR_meso1_path$WikiPathways_2019_Human
+  up_High_to_low_IR_meso1_path$logP<- -log10(up_High_to_low_IR_meso1_path$P.value)
+
+theme_set(theme_classic())
+ggplot(up_High_to_low_IR_meso1_path[1:30,],aes(x=logP,
+               y=fct_reorder(Term,logP),
+               size=Odds.Ratio,
+               fill=P.value)) +
+  geom_point(shape=21) +
+  scale_fill_gradient2(trans = "log", low = "red",high = "black", mid= "blue") +
+  labs(title = "Top pathways up-regulated in High_IR meso cluster 1 ", x = "-log10(p_value)", y = "WikiPathways_2019_Human")
+
+ggsave("./NT_results/NT_results/subgroup_comparision/Top pathways up-regulated in High_IR meso cluster 1.pdf",device="pdf",plot = last_plot(),dpi = 300,width = 9,height = 9)
+
+down_High_to_low_IR_meso1_path<-enrichr(down_High_to_low_IR$gene,pathways)
+  down_High_to_low_IR_meso1_path<-down_High_to_low_IR_meso1_path$WikiPathways_2019_Human
+  down_High_to_low_IR_meso1_path$logP<- -log10(down_High_to_low_IR_meso1_path$P.value)
+
+theme_set(theme_classic())
+ggplot(down_High_to_low_IR_meso1_path[1:20,],aes(x=logP,
+               y=fct_reorder(Term,logP),
+               size=Odds.Ratio,
+               fill=P.value)) +
+  geom_point(shape=21) +
+  scale_fill_gradient2(trans = "log", low = "red",high = "black", mid= "blue") +
+  labs(title = "Top pathways down-regulated in High_IR meso cluster 1 ", x = "-log10(p_value)", y = "WikiPathways_2019_Human")
+
+ggsave("./NT_results/NT_results/subgroup_comparision/Top pathways down-regulated in High_IR meso cluster 1.pdf",device="pdf",plot = last_plot(),dpi = 300,width = 9,height = 9)
+
+
+##################### subset the dataset to have only mesothelial cells 2 cluster and conduct DE analysis between High IR and Low IR using DEseq2 ###############
+
+metadata <- gg_df %>%
+        dplyr::select(cluster_id, sample_id, group) 
+        
+metadata  
+
+clusters <- as.factor(metadata$cluster_id)
+levels(clusters)
+
+cluster_metadata <- metadata[which(metadata$cluster_id == clusters[6]), ]
+head(cluster_metadata)
+
+rownames(cluster_metadata) <- cluster_metadata$sample_id
+head(cluster_metadata)
+
+
+counts <- pb[[clusters[6]]]
+head(counts)
+cluster_counts <- data.frame(counts[, which(colnames(counts) %in% rownames(cluster_metadata))])
+head(counts)
+
+all(rownames(cluster_metadata) == colnames(cluster_counts))     
+ncol(cluster_counts) == nrow(cluster_metadata)
+
+
+dds.meso_sub2 <- DESeqDataSetFromMatrix(cluster_counts, 
+                              colData = cluster_metadata, 
+                              design = ~ group)
+
+rld.meso_sub2 <- rlog(dds.meso_sub2, blind=TRUE)
+
+DESeq2::plotPCA(rld.meso_sub2, intgroup = "group")
+
+rld_mat <- assay(rld.meso_sub2)
+rld_cor <- cor(rld_mat)
+meso_heat<-pheatmap(rld_cor, annotation = cluster_metadata[, c("group"), drop=F],)
+save_pheatmap_pdf <- function(x, filename, width=6, height=4) {
+   stopifnot(!missing(x))
+   stopifnot(!missing(filename))
+   pdf(filename, width=width, height=height)
+   grid::grid.newpage()
+   grid::grid.draw(x$gtable)
+   dev.off()
+}
+save_pheatmap_pdf(meso_heat, "./NT_results/NT_results/subgroup_comparision/meso_sub2_heatmap.pdf")
+
+ggsave("./NT_results/NT_results/subgroup_comparision/meso_sub2_PCA.pdf",device="pdf",plot = last_plot(),dpi = 300,width = 6,height = 4)
+
+
+dds.meso_sub2 <- DESeq(dds.meso_sub2)
+plotDispEsts(dds.meso_sub2)
+
+cluster_metadata$group<-as.factor(cluster_metadata$group)
+
+levels(cluster_metadata$group)[2]
+levels(cluster_metadata$group)[1]
+
+contrast <- c("group", levels(cluster_metadata$group)[2], levels(cluster_metadata$group)[1])
+res.meso_sub2 <- results(dds.meso_sub2, 
+               contrast = contrast,
+               alpha = 0.05)
+
+res.meso_sub2 <- lfcShrink(dds.meso_sub2, 
+                 coef=2, type="apeglm")
+
+res_meso2_tbl <- res.meso_sub2 %>%
+        data.frame() %>%
+        rownames_to_column(var="gene") %>%
+        as_tibble()
+
+write.csv(res_meso2_tbl,
+          paste0("./NT_results/NT_results/subgroup_comparision/", clusters[6], "_", levels(cluster_metadata$sample)[2], "_vs_", levels(cluster_metadata$sample)[1], "_all_genes.csv"),
+          quote = FALSE, 
+          row.names = FALSE)
+
+
+padj_cutoff <- 0.05
+
+sig_res_meso2 <- dplyr::filter(res_meso2_tbl, padj < padj_cutoff) %>%
+        dplyr::arrange(padj)
+
+write.csv(sig_res_meso2,
+          paste0("./NT_results/NT_results/subgroup_comparision/", clusters[6], "_", levels(cluster_metadata$sample)[2], "_vs_", levels(cluster_metadata$sample)[1], "_sig_genes.csv"),
+          quote = FALSE, 
+          row.names = FALSE)
+
+
+normalized_meso2_counts <- counts(dds.meso_sub2, 
+                            normalized = TRUE)
+
+top20_sig_meso2_genes <- sig_res_meso2 %>%
+        dplyr::arrange(padj) %>%
+        dplyr::pull(gene) %>%
+        head(n=20)
+
+top20_sig_meso2_norm <- data.frame(normalized_meso2_counts) %>%
+        rownames_to_column(var = "gene") %>%
+        dplyr::filter(gene %in% top20_sig_meso2_genes)
+
+gathered_top20_meso2_sig <- top20_sig_meso2_norm %>%
+        gather(colnames(top20_sig_meso2_norm)[2:length(colnames(top20_sig_meso2_norm))], key = "samplename", value = "normalized_counts")
+        
+gathered_top20_meso2_sig <- inner_join(ei[, c("sample_id", "group" )], gathered_top20_meso2_sig, by = c("sample_id" = "samplename"))
+
+ggplot(gathered_top20_meso2_sig) +
+        geom_point(aes(x = gene, 
+                       y = normalized_counts, 
+                       color = group), 
+                   position=position_jitter(w=0.1,h=0)) +
+        scale_y_log10() +
+        xlab("Genes") +
+        ylab("log10 Normalized Counts") +
+        ggtitle("Top 20 Significant DE Genes") +
+        theme_bw() +
+        theme(axis.text.x = element_text(angle = 45, hjust = 1)) + 
+        theme(plot.title = element_text(hjust = 0.5))
+
+sig_meso2_norm <- data.frame(normalized_meso2_counts) %>%
+        rownames_to_column(var = "gene") %>%
+        dplyr::filter(gene %in% sig_res_meso2$gene)
+heat_colors <- brewer.pal(6, "YlOrRd")
+
+sig_meso2_heat<-pheatmap(sig_meso2_norm[ , 2:length(colnames(sig_meso2_norm))], 
+    color = heat_colors, 
+    cluster_rows = T, 
+    show_rownames = F,
+    annotation = cluster_metadata[, c("group", "cluster_id")], 
+    border_color = NA, 
+    fontsize = 10, 
+    scale = "row", 
+    fontsize_row = 10, 
+    height = 20)     
+
+save_pheatmap_pdf <- function(x, filename, width=8, height=6) {
+   stopifnot(!missing(x))
+   stopifnot(!missing(filename))
+   pdf(filename, width=width, height=height)
+   grid::grid.newpage()
+   grid::grid.draw(x$gtable)
+   dev.off()
+}
+
+save_pheatmap_pdf(sig_meso2_heat, "./NT_results/NT_results/subgroup_comparision/meso_sub2_sig_change_heatmap.pdf")
+
+
+
+
+res_table_thres_meso2 <- res_meso2_tbl %>% 
+                  mutate(threshold = padj < 0.05 & abs(log2FoldChange) >= 0.58)
+
+ggplot(res_table_thres_meso2) +
+    geom_point(aes(x = log2FoldChange, y = -log10(padj), colour = threshold)) +
+    ggtitle("Volcano plot of High_IR mesothelia 2 cells relative to Low_IR") +
+    xlab("log2 fold change") + 
+    ylab("-log10 adjusted p-value") +
+    scale_y_continuous(limits = c(0,50)) +
+    theme(legend.position = "none",
+          plot.title = element_text(size = rel(1.5), hjust = 0.5),
+          axis.title = element_text(size = rel(1.25)))  
+
+
+ggplot(gathered_top20_meso2_sig) +
+        geom_point(aes(x = gene, 
+                       y = normalized_counts, 
+                       color = group), 
+                   position=position_jitter(w=0.1,h=0)) +
+        scale_y_log10() +
+        xlab("Genes") +
+        ylab("log10 Normalized Counts") +
+        ggtitle("Top 20 Significant DE Genes") +
+        theme_bw() +
+        theme(axis.text.x = element_text(angle = 45, hjust = 1)) + 
+        theme(plot.title = element_text(hjust = 0.5))
+
+sig_res_meso2$gene<-str_to_title(sig_res_meso2$gene)
+
+up_High_to_low_IR<-filter(sig_res_meso2,log2FoldChange<0)
+down_High_to_low_IR<-filter(sig_res_meso2,log2FoldChange>0)
+
+
+
+  up_High_to_low_IR_meso2_path<-enrichr(up_High_to_low_IR$gene,pathways)
+  up_High_to_low_IR_meso2_path<-up_High_to_low_IR_meso2_path$WikiPathways_2019_Human
+  up_High_to_low_IR_meso2_path$logP<- -log10(up_High_to_low_IR_meso2_path$P.value)
+
+theme_set(theme_classic())
+ggplot(up_High_to_low_IR_meso2_path[1:20,],aes(x=logP,
+               y=fct_reorder(Term,logP),
+               size=Odds.Ratio,
+               fill=P.value)) +
+  geom_point(shape=21) +
+  scale_fill_gradient2(trans = "log", low = "red",high = "black", mid= "blue") +
+  labs(title = "Top pathways up-regulated in High_IR meso cluster 2 ", x = "-log10(p_value)", y = "WikiPathways_2019_Human")
+
+ggsave("./NT_results/NT_results/subgroup_comparision/Top pathways up-regulated in High_IR meso cluster 2.pdf",device="pdf",plot = last_plot(),dpi = 300,width = 9,height = 9)
+
+down_High_to_low_IR_meso2_path<-enrichr(down_High_to_low_IR$gene,pathways)
+  down_High_to_low_IR_meso2_path<-down_High_to_low_IR_meso2_path$WikiPathways_2019_Human
+  down_High_to_low_IR_meso2_path$logP<- -log10(down_High_to_low_IR_meso2_path$P.value)
+
+theme_set(theme_classic())
+ggplot(down_High_to_low_IR_meso2_path[1:20,],aes(x=logP,
+               y=fct_reorder(Term,logP),
+               size=Odds.Ratio,
+               fill=P.value)) +
+  geom_point(shape=21) +
+  scale_fill_gradient2(trans = "log", low = "red",high = "black", mid= "blue") +
+  labs(title = "Top pathways down-regulated in High_IR meso cluster 2 ", x = "-log10(p_value)", y = "WikiPathways_2019_Human")
+
+ggsave("./NT_results/NT_results/subgroup_comparision/Top pathways down-regulated in High_IR meso cluster 2.pdf",device="pdf",plot = last_plot(),dpi = 300,width = 9,height = 9)
+
+
+############## Compare the shared and unique DE genes and pathways in mesothelial cell 1 cluster and mesothelial cell 2 cluster ####################################
+
+A <-list('sig_meso1'=sig_res_meso1$gene,'sig_meso2'=sig_res_meso2$gene)
+ggvenn(A)
+
+ggsave("./NT_results/NT_results/subgroup_comparision/meso cluster sig altered genes Venn.pdf",device="pdf",plot = last_plot(),dpi = 300,width = 6,height = 4)
+
+
+shared_gene<-intersect(sig_res_meso1$gene, sig_res_meso2$gene)
+ shared_path<-enrichr(shared_gene,pathways)
+  shared_path<-shared_path$WikiPathways_2019_Human
+  shared_path$logP<- -log10(shared_path$P.value)
+
+theme_set(theme_classic())
+ggplot(shared_path[1:20,],aes(x=logP,
+               y=fct_reorder(Term,logP),
+               size=Odds.Ratio,
+               fill=P.value)) +
+  geom_point(shape=21) +
+  scale_fill_gradient2(trans = "log", low = "red",high = "black", mid= "blue") +
+  labs(title = "Top shared pathways in High_IR to Low_IR meso cluster 1 and 2 ", x = "-log10(p_value)", y = "WikiPathways_2019_Human")
+
+ggsave("./NT_results/NT_results/subgroup_comparision/Top shared pathways in High_IR to Low_IR meso cluster 1 and 2.pdf",device="pdf",plot = last_plot(),dpi = 300,width = 9,height = 9)
+
+meso1_ony<-sig_res_meso1$gene[!(sig_res_meso1$gene %in% sig_res_meso2$gene)]
+
+meso1_ony_path<-enrichr(meso1_ony,pathways)
+  meso1_ony_path<-meso1_ony_path$WikiPathways_2019_Human
+  meso1_ony_path$logP<- -log10(meso1_ony_path$P.value)
+
+theme_set(theme_classic())
+ggplot(meso1_ony_path[1:20,],aes(x=logP,
+               y=fct_reorder(Term,logP),
+               size=Odds.Ratio,
+               fill=P.value)) +
+  geom_point(shape=21) +
+  scale_fill_gradient2(trans = "log", low = "red",high = "black", mid= "blue") +
+  labs(title = "Top altered pathways only in meso 1 at High_IR to Low_IR ", x = "-log10(p_value)", y = "WikiPathways_2019_Human")
+
+ggsave("./NT_results/NT_results/subgroup_comparision/Top altered pathways only in meso 1 at High_IR to Low_IR.pdf",device="pdf",plot = last_plot(),dpi = 300,width = 9,height = 9)
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
