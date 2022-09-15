@@ -58,10 +58,109 @@ HMSLN6<-NormalizeData(HMSLN6)
 
 ############ merge the High IR dataset ##############
 
+High_IR_seurat <- merge(x = HMSLN1, 
+                      y = list(HMSLN2,HMSLN3),
+                      add.cell.id = c("High_IR_1", "High_IR_2", "High_IR_3"))
+
+High_IR_seurat$log10GenesPerUMI <- log10(High_IR_seurat$nFeature_RNA) / log10(High_IR_seurat$nCount_RNA)
+High_IR_seurat$mitoRatio <- PercentageFeatureSet(object = High_IR_seurat, pattern = "^MT-")
+High_IR_seurat$mitoRatio <- High_IR_seurat@meta.data$mitoRatio / 100
 
 
 
+High_IR_seurat <- subset(x = High_IR_seurat, 
+                          subset= (nCount_RNA >= 500) & 
+                            (nFeature_RNA >= 250) & 
+                            (log10GenesPerUMI > 0.80) & 
+                            (mitoRatio < 0.10))
+save(High_IR_seurat, file="./merged_High_IR_seurat.RData")
+
+High_IR_seurat<-NormalizeData(High_IR_seurat, verbose = FALSE)
+High_IR_seurat<-FindVariableFeatures(High_IR_seurat, verbose = FALSE)
+High_IR_seurat <- ScaleData(High_IR_seurat,  verbose = FALSE)
+High_IR_seurat <- RunPCA(High_IR_seurat, verbose = FALSE)
+
+High_IR_seurat <- FindNeighbors(High_IR_seurat, dims = 1:15)
+High_IR_seurat <- FindClusters(High_IR_seurat, resolution = 0.1)
+
+High_IR_seurat <- RunTSNE(High_IR_seurat, dims = 1:15)
+
+DimPlot(High_IR_seurat, reduction = "tsne", label = TRUE)
+ggsave("./individual_cluster/highIR_d15_tsne_1.pdf",device="pdf",plot = last_plot(),dpi = 300,width = 6,height = 6)
+
+
+dev.off()
+
+DimPlot(High_IR_seurat, reduction = "tsne", split.by = "orig.ident")
+ggsave("./individual_cluster/highIR_d15_tsne_sample.pdf",device="pdf",plot = last_plot(),dpi = 300,width = 12,height = 6)
+
+dev.off()
+
+High_IR_group.markers <- FindAllMarkers(High_IR_seurat, only.pos = TRUE, min.pct = 0.25, logfc.threshold = 0.25)
+
+High_IR_group.markers %>%
+    group_by(cluster) %>%
+    top_n(n = 10, wt = avg_log2FC) -> high_top10
+
+b<-DoHeatmap(High_IR_seurat, features = high_top10$gene)
+
+ggsave("./individual_cluster/high_IR_heatmap.pdf",device="pdf",plot = b,dpi = 300,width = 16,height = 9)
+
+VlnPlot(High_IR_seurat, features = c("MSLN","UPK3B","KRT8","MFAP5","PTPRC","CD3D","AIF1","GZMB"), stack=T, flip=T,pt.size = 0, adjust=2)
+
+ggsave("./individual_cluster/volin_paper_gene_high_IR.pdf",device="pdf",plot = last_plot(),dpi = 300,width = 9,height = 12)
+
+############ merge the Low IR dataset ##############
+low_IR_seurat <- merge(x = HMSLN5, 
+                      y = HMSLN6,
+                      add.cell.id = c("Low_IR_5", "Low_IR_6"))
+
+low_IR_seurat$log10GenesPerUMI <- log10(low_IR_seurat$nFeature_RNA) / log10(low_IR_seurat$nCount_RNA)
+low_IR_seurat$mitoRatio <- PercentageFeatureSet(object = low_IR_seurat, pattern = "^MT-")
+low_IR_seurat$mitoRatio <- low_IR_seurat@meta.data$mitoRatio / 100
 
 
 
+low_IR_seurat <- subset(x = low_IR_seurat, 
+                          subset= (nCount_RNA >= 500) & 
+                            (nFeature_RNA >= 250) & 
+                            (log10GenesPerUMI > 0.80) & 
+                            (mitoRatio < 0.10))
+save(low_IR_seurat, file="./merged_Low_IR_seurat.RData")
+
+
+low_IR_seurat<-NormalizeData(low_IR_seurat, verbose = FALSE)
+low_IR_seurat<-FindVariableFeatures(low_IR_seurat, verbose = FALSE)
+low_IR_seurat <- ScaleData(low_IR_seurat,  verbose = FALSE)
+low_IR_seurat <- RunPCA(low_IR_seurat, verbose = FALSE)
+
+low_IR_seurat <- FindNeighbors(low_IR_seurat, dims = 1:15)
+low_IR_seurat <- FindClusters(low_IR_seurat, resolution = 0.1)
+
+low_IR_seurat <- RunTSNE(low_IR_seurat, dims = 1:15)
+
+DimPlot(low_IR_seurat, reduction = "tsne", label = TRUE)
+ggsave("./individual_cluster/lowIR_d15_tsne_1.pdf",device="pdf",plot = last_plot(),dpi = 300,width = 6,height = 6)
+
+
+dev.off()
+
+DimPlot(low_IR_seurat, reduction = "tsne", split.by = "orig.ident")
+ggsave("./individual_cluster/lowIR_d15_tsne_sample.pdf",device="pdf",plot = last_plot(),dpi = 300,width = 12,height = 6)
+
+dev.off()
+
+low_IR_group.markers <- FindAllMarkers(low_IR_seurat, only.pos = TRUE, min.pct = 0.25, logfc.threshold = 0.25)
+
+low_IR_group.markers %>%
+    group_by(cluster) %>%
+    top_n(n = 10, wt = avg_log2FC) -> low_top10
+
+a<-DoHeatmap(low_IR_seurat, features = low_top10$gene)
+
+ggsave("./individual_cluster/low_IR_heatmap.pdf",device="pdf",plot = a,dpi = 300,width = 16,height = 9)
+
+VlnPlot(low_IR_seurat, features = c("MSLN","UPK3B","KRT8","MFAP5","PTPRC","CD3D","AIF1","GZMB"), stack=T, flip=T,pt.size = 0, adjust=2)
+
+ggsave("./individual_cluster/volin_paper_gene_low_IR.pdf",device="pdf",plot = last_plot(),dpi = 300,width = 9,height = 12)
 
