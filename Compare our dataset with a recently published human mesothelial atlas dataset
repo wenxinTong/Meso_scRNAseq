@@ -56,3 +56,106 @@ integrated_low_high_IR_seurat<-subset(x = Integrated_d15_tsne, idents = c( "Meso
 DimPlot(integrated_low_high_IR_seurat, reduction = "TSNE", label = TRUE)
 ggsave("./results/integrated_low_high_IR_seurat_subset_tSNE.pdf",device="pdf",plot = last_plot(),dpi = 300,width = 9,height = 6)
 
+########### Integrate our dataset with the public dataset mentioned earlier ######################################
+
+nature_meso_seurat@meta.data$ident<-paste0("nature_", nature_meso_seurat@meta.data$ident)
+integrated_low_high_IR_seurat@meta.data$ident<-paste0("Gupta_meso_", integrated_low_high_IR_seurat@meta.data$ident)
+
+merged_nature_Gupta_meso_seurat <- merge(x = integrated_low_high_IR_seurat, 
+                      y = list(nature_meso_seurat),
+                      add.cell.id = c("Gupta_meso", "nature_meso"))
+
+metadata <- merged_nature_Gupta_meso_seurat@meta.data
+metadata$cells <- rownames(metadata)
+metadata$compare <- NA
+metadata$compare[which(str_detect(metadata$cells, "^nature_meso"))] <- "nature_meso"
+metadata$compare[which(str_detect(metadata$cells, "^Gupta_meso"))] <- "Gupta_meso"
+
+
+merged_nature_Gupta_meso_seurat@meta.data <- metadata
+save(merged_nature_Gupta_meso_seurat, file="./merged_nature_Gupta_meso_seurat.RData")
+
+split_nature_Gupta_meso_seurat <- SplitObject(merged_nature_Gupta_meso_seurat, split.by = "compare")
+
+split_nature_Gupta_meso_seurat <- lapply(X = split_nature_Gupta_meso_seurat, FUN = function(x) {
+    x <- NormalizeData(x, verbose = FALSE)
+    x <- FindVariableFeatures(x, verbose = FALSE)
+})
+
+features <- SelectIntegrationFeatures(object.list = split_nature_Gupta_meso_seurat)
+split_nature_Gupta_meso_seurat <- lapply(X = split_nature_Gupta_meso_seurat, FUN = function(x) {
+    x <- ScaleData(x, features = features, verbose = FALSE)
+    x <- RunPCA(x, features = features, verbose = FALSE)
+})
+
+anchors <- FindIntegrationAnchors(object.list = split_nature_Gupta_meso_seurat, reference = c(1, 2), reduction = "rpca",
+    dims = 1:50)
+
+integrated_split_nature_Gupta_meso_seurat <- IntegrateData(anchorset = anchors, dims = 1:50)
+integrated_split_nature_Gupta_meso_seurat<-ScaleData(integrated_split_nature_Gupta_meso_seurat, verbose = FALSE)
+integrated_split_nature_Gupta_meso_seurat <- RunPCA(integrated_split_nature_Gupta_meso_seurat, verbose = FALSE)
+integrated_split_nature_Gupta_meso_seurat <- RunUMAP(integrated_split_nature_Gupta_meso_seurat, dims = 1:50)
+
+DimPlot(integrated_split_nature_Gupta_meso_seurat, group.by = "compare")
+
+
+integrated_split_nature_Gupta_meso_seurat_d15 <- RunPCA(integrated_split_nature_Gupta_meso_seurat, features = VariableFeatures(object = integrated_split_nature_Gupta_meso_seurat))
+integrated_split_nature_Gupta_meso_seurat_d15 <- FindNeighbors(integrated_split_nature_Gupta_meso_seurat_d15, dims = 1:15)
+integrated_split_nature_Gupta_meso_seurat_d15 <- FindClusters(integrated_split_nature_Gupta_meso_seurat_d15, resolution = 0.05)
+integrated_split_nature_Gupta_meso_seurat_d15 <- RunTSNE(integrated_split_nature_Gupta_meso_seurat_d15, dims = 1:15)
+integrated_split_nature_Gupta_meso_seurat_d15$compare<-factor(integrated_split_nature_Gupta_meso_seurat_d15$compare,levels = c("nature_meso","Gupta_meso"))
+
+DimPlot(integrated_split_nature_Gupta_meso_seurat_d15, reduction = "tsne", label = TRUE)
+
+DimPlot(integrated_split_nature_Gupta_meso_seurat_d15, reduction = "tsne", label = TRUE,split.by = "compare")
+ggsave("./results/integrated_nature_gupta_meso_tSNE.pdf",device="pdf",plot = last_plot(),dpi = 300,width = 9,height = 6)
+
+
+#################### Plot the River plot showing the similarity of mesothelial cell sub-clusters in our dataset with the public dataset shown in the paper mentioned earlier #############
+integrated_low_high_IR_sce<-as.SingleCellExperiment(integrated_low_high_IR_seurat)
+
+head(colData(integrated_low_high_IR_sce))
+
+
+rowData(integrated_low_high_IR_sce)$feature_symbol<-rownames(integrated_low_high_IR_sce)
+colData(integrated_low_high_IR_sce)$ident<-paste0("Gupta_meso_", colData(integrated_low_high_IR_sce)$ident)
+
+rowData(nature_meso)$feature_symbol<-rownames(nature_meso)
+colData(nature_meso)$ident<-paste0("Nature_", colData(nature_meso)$ident)
+
+
+integrated_low_high_IR_sce <- integrated_low_high_IR_sce[!duplicated(rownames(integrated_low_high_IR_sce)), ]
+nature_meso <- nature_meso[!duplicated(rownames(nature_meso)), ]
+
+
+
+
+integrated_low_high_IR_sce <- selectFeatures(integrated_low_high_IR_sce, suppress_plot = FALSE)
+nature_meso <- selectFeatures(nature_meso, suppress_plot = FALSE)
+
+
+
+integrated_low_high_IR_sce<-indexCluster(integrated_low_high_IR_sce[rowData(integrated_low_high_IR_sce)$scmap_features, ],cluster_col = "ident")
+nature_meso<-indexCluster(nature_meso[rowData(nature_meso)$scmap_features, ],cluster_col = "ident")
+
+
+
+
+heatmap(as.matrix(metadata(integrated_low_high_IR_sce)$scmap_cluster_index))
+heatmap(as.matrix(metadata(nature_meso)$scmap_cluster_index))
+
+Gupta_results <- scmapCluster(
+  projection = integrated_low_high_IR_sce, 
+  index_list = list(
+    nature_meso = metadata(nature_meso)$scmap_cluster_index
+  )
+)
+
+
+plot(getSankey(colData(integrated_low_high_IR_sce)$ident,  Gupta_results$scmap_cluster_labs[,1], plot_height=400))
+
+
+
+
+
+
