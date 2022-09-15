@@ -1,0 +1,210 @@
+library(SingleCellExperiment)
+library(Seurat)
+library(tidyverse)
+library(Matrix)
+library(scales)
+library(cowplot)
+library(RCurl)
+library(AnnotationHub)
+
+############# read the data ##############
+
+for (file in c("HMSLN1", "HMSLN2","HMSLN3","HMSLN5","HMSLN6")){
+        seurat_data <- Read10X(data.dir = paste0("./", file))
+        seurat_obj <- CreateSeuratObject(counts = seurat_data, 
+                                         min.features = 100, 
+                                         project = file)
+        assign(file, seurat_obj)
+}
+
+
+############# merge and filter the data ##############
+
+merged_seurat <- merge(x = HMSLN1, 
+                      y = list(HMSLN2,HMSLN3,HMSLN5, HMSLN6),
+                      add.cell.id = c("High_IR", "High_IR", "High_IR", "Low_IR","Low_IR"))
+
+merged_seurat$log10GenesPerUMI <- log10(merged_seurat$nFeature_RNA) / log10(merged_seurat$nCount_RNA)
+merged_seurat$mitoRatio <- PercentageFeatureSet(object = merged_seurat, pattern = "^MT-")
+merged_seurat$mitoRatio <- merged_seurat@meta.data$mitoRatio / 100
+metadata <- merged_seurat@meta.data
+metadata$cells <- rownames(metadata)
+metadata$sample <- NA
+metadata$sample[which(str_detect(metadata$cells, "^High_IR"))] <- "High_IR"
+metadata$sample[which(str_detect(metadata$cells, "^Low_IR"))] <- "Low_IR"
+merged_seurat@meta.data <- metadata
+
+merged_seurat <- subset(x = merged_seurat, 
+                          subset= (nCount_RNA >= 500) & 
+                            (nFeature_RNA >= 250) & 
+                            (log10GenesPerUMI > 0.80) & 
+                            (mitoRatio < 0.10))
+
+save(merged_seurat, file="./filtered_merged_seurat.RData")
+
+############# Integrate the data by Low IR and High IR conditions ##############
+
+split_seurat <- SplitObject(merged_seurat, split.by = "sample")
+
+split_seurat <- lapply(X = split_seurat, FUN = function(x) {
+    x <- NormalizeData(x, verbose = FALSE)
+    x <- FindVariableFeatures(x, verbose = FALSE)
+})
+
+features <- SelectIntegrationFeatures(object.list = split_seurat)
+split_seurat <- lapply(X = split_seurat, FUN = function(x) {
+    x <- ScaleData(x, features = features, verbose = FALSE)
+    x <- RunPCA(x, features = features, verbose = FALSE)
+})
+
+anchors <- FindIntegrationAnchors(object.list = split_seurat, reference = c(1, 2), reduction = "rpca",
+    dims = 1:50)
+
+integrated_seurat <- IntegrateData(anchorset = anchors, dims = 1:50)
+integrated_seurat<-ScaleData(integrated_seurat, verbose = FALSE)
+integrated_seurat <- RunPCA(integrated_seurat, verbose = FALSE)
+integrated_seurat <- RunUMAP(integrated_seurat, dims = 1:50)
+
+
+DimPlot(integrated_seurat, group.by = "sample")
+ggsave("./NT_results/Integration.pdf",device="pdf",plot = last_plot(),dpi = 300,width = 6,height = 6)
+DimPlot(integrated_seurat, group.by = "orig.ident")
+ggsave("./NT_results/Integration_sample.pdf",device="pdf",plot = last_plot(),dpi = 300,width = 12,height = 6)
+
+
+############# Clustering the integrated dataset ##############
+
+Integrated_d15 <- RunPCA(integrated_seurat, features = VariableFeatures(object = integrated_seurat))
+Integrated_d15 <- FindNeighbors(Integrated_d15, dims = 1:15)
+Integrated_d15 <- FindClusters(Integrated_d15, resolution = 0.1)
+Integrated_d15 <- RunTSNE(Integrated_d15, dims = 1:15)
+Integrated_d15$sample<-factor(Integrated_d15$sample,levels = c("Low_IR","High_IR"))
+
+
+DimPlot(Integrated_d15, reduction = "tsne", label = TRUE)
+ggsave("./NT_results/Integrated_d15_tsne_1.pdf",device="pdf",plot = last_plot(),dpi = 300,width = 6,height = 6)
+
+dev.off()
+DimPlot(Integrated_d15, reduction = "tsne", split.by = "sample")
+ggsave("./NT_results/Integrated_d15_tsne_group.pdf",device="pdf",plot = last_plot(),dpi = 300,width = 12,height = 6)
+
+dev.off()
+
+DimPlot(Integrated_d15, reduction = "tsne", split.by = "orig.ident")
+ggsave("./NT_results/Integrated_d15_tsne_sample.pdf",device="pdf",plot = last_plot(),dpi = 300,width = 16,height = 6)
+
+dev.off()
+
+DimPlot(Integrated_d15, reduction = "umap", label = TRUE)
+ggsave("./NT_results/Integrated_d15_umap_1.pdf",device="pdf",plot = last_plot(),dpi = 300,width = 6,height = 6)
+
+dev.off()
+DimPlot(Integrated_d15, reduction = "umap", split.by = "sample")
+ggsave("./NT_results/Integrated_d15_umap_group.pdf",device="pdf",plot = last_plot(),dpi = 300,width = 12,height = 6)
+
+dev.off()
+
+DimPlot(Integrated_d15, reduction = "umap", split.by = "orig.ident")
+ggsave("./NT_results/Integrated_d15_umap_sample.pdf",device="pdf",plot = last_plot(),dpi = 300,width = 16,height = 6)
+
+dev.off()
+
+############# Find group markers and check marker gene expression within clusters ##############
+
+group.markers <- FindAllMarkers(Integrated_d15, only.pos = TRUE, min.pct = 0.25, logfc.threshold = 0.25)
+
+group.markers %>%
+    group_by(cluster) %>%
+    top_n(n = 10, wt = avg_log2FC) -> top10
+
+a<-DoHeatmap(Integrated_d15, features = top10$gene)
+
+ggsave("./NT_results/heatmap.pdf",device="pdf",plot = a,dpi = 300,width = 16,height = 9)
+
+group.marker_gene<-group.markers %>%
+    group_by(cluster) %>%
+    slice_max(n = 1, order_by = avg_log2FC)
+
+group.marker_gene$gene
+
+VlnPlot(Integrated_d15, features = c("MSLN","UPK3B","KRT8","MFAP5","PTPRC","CD3D","AIF1","GZMB"), stack=T, flip=T,pt.size = 0, adjust=2)
+
+ggsave("./NT_results/volin_paper_gene.pdf",device="pdf",plot = last_plot(),dpi = 300,width = 9,height = 18)
+
+
+FeaturePlot(Integrated_d15,features = c("MSLN"),split.by = "sample",reduction = "tsne",min.cutoff = "q5", max.cutoff = "q95")
+ggsave("./NT_results/MSLN.pdf",device="pdf",plot = last_plot(),dpi = 300,width = 9,height = 18)
+
+VlnPlot(Integrated_d15, features = group.marker_gene$gene, stack=T, flip=T,pt.size = 0, adjust=2.5)
+
+ggsave("./NT_results/group_marker_gene.pdf",device="pdf",plot = last_plot(),dpi = 300,width = 9,height = 18)
+
+
+
+############# Annotate the integrated clusters ##############
+
+annotated_seurat<-RenameIdents(object = Integrated_d15, 
+                               "0" = "Mesothelial cells 1",
+                               "1" = "Mesothelial cells 2",
+                               "2" = "MFAP5+ cells" ,
+                               "3" = "T cells",
+                               "4" = "Macrophages",
+                               "5" = "Transition cells",
+                               "6"= "NK cells",
+                               "7"= "NA")
+
+
+saveRDS(annotated_seurat,file = "./annotated_seurat.rds")
+VlnPlot(annotated_seurat, features = c("MSLN","UPK3B","KRT8","MFAP5","PTPRC","CD3D","AIF1","GZMB"), stack=T, flip=T,pt.size = 0, adjust=2)
+
+ggsave("./NT_results/annotated_volin_paper_gene.pdf",device="pdf",plot = last_plot(),dpi = 300,width = 9,height = 12)
+
+
+DimPlot(annotated_seurat, reduction = "tsne", split.by = "sample",label = TRUE,
+    repel = TRUE)
+ggsave("./NT_results/annotated_Integrated_d15_umap_group.pdf",device="pdf",plot = last_plot(),dpi = 300,width = 12,height = 6)
+
+DoHeatmap(annotated_seurat, features = top10$gene)
+
+ggsave("./NT_results/annotated_heatmap.pdf",device="pdf",plot = last_plot(),dpi = 300,width = 16,height = 9)
+
+
+############# Check the cell type compositions ##############
+
+pt <- table(Idents(annotated_seurat), annotated_seurat$orig.ident)
+pt <- as.data.frame(pt)
+pt$Var1 <- as.character(pt$Var1)
+
+ggplot(pt, aes(x = Var2, y = Freq, fill = Var1)) +
+  theme_bw(base_size = 15) +
+  geom_col(position = "fill", width = 0.5) +
+  xlab("Sample") +
+  ylab("Proportion") +
+  scale_fill_manual(values = brewer.pal(12, "Paired")) +
+  theme(legend.title = element_blank())
+ggsave("./NT_results/sample_cluster_percentage.pdf",device="pdf",plot = last_plot(),dpi = 300,width = 9,height = 6)
+
+
+simplified_seurat<-RenameIdents(object = Integrated_d15, 
+                               "0" = "Mesothelial cells",
+                               "1" = "Mesothelial cells",
+                               "2" = "MFAP5+ cells" ,
+                               "3" = "Immune cells",
+                               "4" = "Immune cells",
+                               "5" = "Transition cells",
+                               "6"= "Immune cells",
+                               "7"= "NA")
+
+pt_simple <- table(Idents(simplified_seurat), annotated_seurat$orig.ident)
+pt_simple <- as.data.frame(pt_simple)
+pt_simple$Var1 <- as.character(pt_simple$Var1)
+
+ggplot(pt_simple, aes(x = Var2, y = Freq, fill = Var1)) +
+  theme_bw(base_size = 15) +
+  geom_col(position = "fill", width = 0.5) +
+  xlab("Sample") +
+  ylab("Proportion") +
+  scale_fill_manual(values = brewer.pal(12, "Paired")) +
+  theme(legend.title = element_blank())
+ggsave("./NT_results/simplified_sample_cluster_percentage.pdf",device="pdf",plot = last_plot(),dpi = 300,width = 9,height = 6)
+dev.off()
