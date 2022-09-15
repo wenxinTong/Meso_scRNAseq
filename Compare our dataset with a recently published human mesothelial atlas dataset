@@ -1,0 +1,58 @@
+
+library(SingleCellExperiment)
+library(Seurat)
+library(tidyverse)
+library(Matrix)
+library(scales)
+library(cowplot)
+library(RCurl)
+library(AnnotationHub)
+library(scmap)
+
+############### The human mesothelial atlas dataset could be downloaded at https://gitlab.com/rosen-lab/white-adipose-atlas within the 
+human_mesothelium.rds (1.8 GB) ---> https://drive.google.com/file/d/1FR-_BlXRiVvE3Hzr1PDnxT7XHOL5jL07/view
+Related information regarding this public dataset could be find in the paper published at: Nature volume 603, pages926–933 (2022).################
+
+
+nature_meso<-readRDS("./human_omental_meso_sce.rds")
+
+summary(factor(colData(nature_meso)$ident))
+
+############## Convert the published dataset into seurat, check the clustering, and get ready for integradation with our datasets ##########################
+
+nature_meso_seurat<-as.Seurat(nature_meso, counts = "counts", data = "logcounts")
+
+head(nature_meso_seurat@meta.data)
+human_omental_meso_subsets@meta.data$ident<-human_omental_meso_subsets@active.ident
+human_omental_meso_subsets@meta.data$ident<-paste0("Gupta_omental_", human_omental_meso_subsets@meta.data$ident)
+head(human_omental_meso_subsets@meta.data)
+
+nature_meso_seurat<-NormalizeData(nature_meso_seurat, verbose = FALSE)
+nature_meso_seurat<-FindVariableFeatures(nature_meso_seurat, verbose = FALSE)
+nature_meso_seurat <- ScaleData(nature_meso_seurat,  verbose = FALSE)
+nature_meso_seurat <- RunPCA(nature_meso_seurat, verbose = FALSE)
+
+nature_meso_seurat <- FindNeighbors(nature_meso_seurat, dims = 1:15)
+nature_meso_seurat <- FindClusters(nature_meso_seurat, resolution = 0.1)
+
+nature_meso_seurat <- RunTSNE(nature_meso_seurat, dims = 1:15)
+
+save(nature_meso_seurat, file="./nature_meso_seurat.RData")
+
+
+DimPlot(nature_meso_seurat, reduction = "tsne", label = TRUE)
+ggsave("./results/nature_meso_seurat_tsne.pdf",device="pdf",plot = last_plot(),dpi = 300,width = 6,height = 6)
+
+
+VlnPlot(nature_meso_seurat, features = c("MSLN","UPK3B","KRT8","MFAP5","PTPRC","CD3D","AIF1","GZMB"), stack=T, flip=T,pt.size = 0, adjust=2)
+ggsave("./results/nature_meso_seurat_tsne_vollin_paper_gene.pdf",device="pdf",plot = last_plot(),dpi = 300,width = 6,height = 9)
+
+
+############## Convert the published dataset into seurat, check the clustering, and get ready for integradation with our datasets ##########################
+load("Integrated_d15_tsne.RData")
+
+integrated_low_high_IR_seurat<-subset(x = Integrated_d15_tsne, idents = c( "Mesothelial cells 1", "Mesothelial cells 2","Transition cells"),invert = FALSE)
+
+DimPlot(integrated_low_high_IR_seurat, reduction = "TSNE", label = TRUE)
+ggsave("./results/integrated_low_high_IR_seurat_subset_tSNE.pdf",device="pdf",plot = last_plot(),dpi = 300,width = 9,height = 6)
+
