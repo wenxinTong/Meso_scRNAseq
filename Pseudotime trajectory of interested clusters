@@ -1,0 +1,103 @@
+setwd("/dmpi/analysis/RGupta/Meso_scRNAseq")
+
+library(SingleCellExperiment)
+library(Seurat)
+library(tidyverse)
+library(Matrix)
+library(scales)
+library(cowplot)
+library(RCurl)
+library(AnnotationHub)
+library(slingshot)
+library(tradeSeq)
+
+################ subset the dataset to clusters we are interested in: mesothelial cells, transition cells, and MFAP5+ cells ##########
+load("annotated_seurat.RData")
+
+subset_seurat<- subset(x = annotated_seurat, idents = c( "Mesothelial cells 1",
+                                "Mesothelial cells 2",
+                                "MFAP5+ cells" ,
+                               "Transition cells"),invert = FALSE)
+
+meso_subgroup_sce <- as.SingleCellExperiment(subset_seurat)
+
+saveRDS(meso_subgroup_sce,file = "./meso_subgroup_sce.rds")
+
+summary(factor(colData(meso_subgroup_sce)$ident))
+
+DimPlot(subset_seurat, reduction = "tsne", split.by = "sample")
+
+################ Conduct Pseudotime trajectory using slingshot ##########
+
+
+dimred <- subset_seurat@reductions$tsne@cell.embeddings
+clustering <- subset_seurat$seurat_clusters
+
+head(clustering)
+counts <- as.matrix(subset_seurat@assays$RNA@counts[subset_seurat@assays$integrated@var.features,])
+dim(counts)
+
+
+suppressPackageStartupMessages({
+    library(slingshot)
+})
+set.seed(1)
+lineages <- getLineages(data = dimred, clusterLabels = clustering)
+
+lineages
+
+plot(dimred, col = brewer.pal(9,"Set1")[clustering],  pch = 16)
+lines(SlingshotDataSet(lineages), lwd = 3, col = 'black')
+ggsave("./NT_results/only_meso_pseudotime_route.pdf",device="pdf",plot = last_plot(),dpi = 300,width = 9,height = 6)
+
+sce<-as.SingleCellExperiment(subset_seurat) 
+sce <- slingshot(sce, clusterLabels = 'seurat_clusters', reducedDim = 'TSNE', start.clus=1, stretch=0)
+slingsce<-SlingshotDataSet(sce)
+
+plot(reducedDims(sce)$TSNE, col = brewer.pal(9,'Set1')[sce$seurat_clusters], pch=16)
+lines(SlingshotDataSet(sce), lwd=3, col='black')
+
+ggsave("./NT_results/only_meso_pseudotime_Tsne.pdf",device="pdf",plot = last_plot(),dpi = 300,width = 9,height = 6)
+
+low_IR_seurat<- subset(x = subset_seurat, subset = sample == "Low_IR")
+DimPlot(low_IR_seurat, reduction = "tsne", split.by = "sample")
+
+sce <- as.SingleCellExperiment(low_IR_seurat)
+sce <- slingshot(sce, clusterLabels = 'seurat_clusters', reducedDim = 'TSNE', start.clus=2, stretch=0)
+slingsce<-SlingshotDataSet(sce)
+
+plot(reducedDims(sce)$TSNE, col = brewer.pal(9,'Set1')[sce$seurat_clusters], pch=16)
+lines(SlingshotDataSet(sce), lwd=2, col='black')
+
+colors <- colorRampPalette(brewer.pal(11,'Spectral')[-6])(100)
+plotcol <- colors[cut(sce$slingPseudotime_1, breaks=100)]
+
+plot(reducedDims(sce)$TSNE, col = plotcol, pch=16)
+lines(SlingshotDataSet(sce), lwd=2, col='black')
+
+low_IR_seurat$pseudotime1 <- sce$slingPseudotime_1  
+FeaturePlot(low_IR_seurat, "pseudotime1",reduction = "tsne")
+
+ggsave("./NT_results/only_meso_low_IR_pseudotime.pdf",device="pdf",plot = last_plot(),dpi = 300,width = 9,height = 6)
+```
+```{r}
+high_IR_seurat<- subset(x = subset_seurat, subset = sample == "High_IR")
+DimPlot(high_IR_seurat, reduction = "tsne", split.by = "sample")
+
+sce <- as.SingleCellExperiment(high_IR_seurat)
+sce <- slingshot(sce, clusterLabels = 'seurat_clusters', reducedDim = 'TSNE', start.clus=2, stretch=0)
+slingsce<-SlingshotDataSet(sce)
+
+plot(reducedDims(sce)$TSNE, col = brewer.pal(9,'Set1')[sce$seurat_clusters], pch=16)
+lines(SlingshotDataSet(sce), lwd=2, col='black')
+
+colors <- colorRampPalette(brewer.pal(11,'Spectral')[-6])(100)
+plotcol <- colors[cut(sce$slingPseudotime_1, breaks=100)]
+
+plot(reducedDims(sce)$TSNE, col = plotcol, pch=16)
+lines(SlingshotDataSet(sce), lwd=2, col='black')
+
+high_IR_seurat$pseudotime1 <- sce$slingPseudotime_1  
+FeaturePlot(high_IR_seurat, "pseudotime1",reduction = "tsne")
+
+ggsave("./NT_results/only_meso_high_IR_pseudotime.pdf",device="pdf",plot = last_plot(),dpi = 300,width = 9,height = 6)
