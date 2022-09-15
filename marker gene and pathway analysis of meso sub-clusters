@@ -1,0 +1,41 @@
+meso_group.markers <- FindAllMarkers(subset_seurat, only.pos = TRUE, min.pct = 0.25, logfc.threshold = 0.25)
+
+meso_group.markers %>%
+    group_by(cluster) %>%
+    top_n(n = 10, wt = avg_log2FC) -> top10
+
+DoHeatmap(subset_seurat, features = top10$gene)
+
+IGF1_count<-FetchData(object = subset_seurat, vars = c("IGF1", "orig.ident", "sample","ident"))
+ggplot(IGF1_count,aes(x=sample,
+               y=IGF1,fill = sample))+ geom_violin(alpha = 0.5,trim= FALSE) +geom_boxplot(width = 0.2) +scale_y_log10() +
+  theme(legend.position = "none")+  facet_wrap(~ ident)
+
+ggsave("./NT_results/NT_results/subgroup_comparision/IGF_subgroup.pdf",device="pdf",plot = last_plot(),dpi = 300,width = 9,height = 6)
+
+
+Mesothelial_1_2_markers <- FindMarkers(subset_seurat, ident.1 = "Mesothelial cells 1", ident.2 = "Mesothelial cells 2", only.pos = TRUE,min.pct = 0.25, logfc.threshold = 0.25)
+
+sig_Mesothelial_1_2_markers<-rownames(filter(Mesothelial_1_2_markers,p_val_adj<0.05))
+sig_Mesothelial_1_2_markers<-str_to_title(sig_Mesothelial_1_2_markers)
+pathways <- c('GO_Biological_Process_2018','KEGG_2019_Human','WikiPathways_2019_Human')
+  
+  meso1_2_marker_path<-enrichr(sig_Mesothelial_1_2_markers,pathways)
+  meso1_2_marker_path<-meso1_2_marker_path$WikiPathways_2019_Human
+  meso1_2_marker_path$logP<- -log10(meso1_2_marker_path$P.value)
+
+theme_set(theme_classic())
+ggplot(meso1_2_marker_path[1:20,],aes(x=logP,
+               y=fct_reorder(Term,logP),
+               size=Odds.Ratio,
+               fill=P.value)) +
+  geom_point(shape=21) +
+  scale_fill_gradient2(trans = "log", low = "red",high = "black", mid= "blue") +
+  labs(title = "Top pathways associated with meso cluster 1 and 2 markers", x = "-log10(p_value)", y = "WikiPathways_2019_Human")
+
+ggsave("./NT_results/NT_results/Top pathways associated with meso cluster 1 and 2 markers.pdf",device="pdf",plot = last_plot(),dpi = 300,width = 9,height = 9)
+
+sig_Mesothelial_1_2_markers<-rownames(filter(Mesothelial_1_2_markers,p_val_adj<0.05))
+DoHeatmap(subset_seurat, features = sig_Mesothelial_1_2_markers)
+
+ggsave("./NT_results/NT_results/Heatmap of meso cluster 1 and 2 markers.pdf",device="pdf",plot = last_plot(),dpi = 300,width = 12,height = 8)
